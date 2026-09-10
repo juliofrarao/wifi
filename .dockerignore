@@ -1,0 +1,10 @@
+# Não entra na imagem: dependências e builds locais, dados, git, saídas de teste.
+node_modules
+**/node_modules
+**/dist
+data
+**/data
+.git
+.env
+e2e/output
+*.log

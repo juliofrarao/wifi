@@ -22,9 +22,13 @@ COPY package.json package-lock.json ./
 COPY shared/package.json shared/
 COPY server/package.json server/
 COPY web/package.json web/
+# --ignore-scripts evita o postinstall da raiz (que compila o shared com o tsc, ausente aqui);
+# por isso o binário nativo do better-sqlite3 é montado explicitamente com `npm rebuild`.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
  && npm ci --omit=dev --no-audit --no-fund --ignore-scripts -w server -w shared \
- && apt-get purge -y python3 make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+ && npm rebuild better-sqlite3 --no-audit --no-fund \
+ && apt-get purge -y python3 make g++ && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /data && chown node:node /data
 COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/web/dist ./web/dist

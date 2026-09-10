@@ -22,9 +22,18 @@ export function dbPath(dataDir: string): string {
 async function main(): Promise<void> {
   const envFile = loadDotEnv();
   const config = loadConfig();
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.mkdirSync(path.join(config.dataDir, 'uploads'), { recursive: true });
-  fs.mkdirSync(path.join(config.dataDir, 'backups'), { recursive: true });
+  try {
+    fs.mkdirSync(config.dataDir, { recursive: true });
+    fs.mkdirSync(path.join(config.dataDir, 'uploads'), { recursive: true });
+    fs.mkdirSync(path.join(config.dataDir, 'backups'), { recursive: true });
+    fs.accessSync(config.dataDir, fs.constants.W_OK);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Sem permissão para escrever em DATA_DIR (${config.dataDir}): ${message}. ` +
+        'No Docker, a pasta ./data precisa pertencer ao usuário 1000 (mkdir -p data && sudo chown -R 1000:1000 data).'
+    );
+  }
 
   const db = openDb(dbPath(config.dataDir));
   seedSettings(db, config);
