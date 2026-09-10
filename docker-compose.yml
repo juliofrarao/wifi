@@ -11,8 +11,11 @@ services:
       DATA_DIR: /data
       HOST: 0.0.0.0
       PORT: 3000
+      TRUST_PROXY: "true"
+      WEB_DIST: /app/web/dist
     volumes:
-      - app-data:/data
+      # Pasta real ao lado do compose: contém creche.sqlite, uploads/ e backups/.
+      - ./data:/data
     expose:
       - "3000"
 
@@ -32,6 +35,5 @@ services:
       - app
 
 volumes:
-  app-data:
   caddy-data:
   caddy-config:
