@@ -1,0 +1,25 @@
+{
+  "name": "creche-segura",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Controle de entrada e saída de crianças na creche com carteirinha NFC/QR, alertas para os responsáveis e painel para a administração.",
+  "type": "module",
+  "engines": { "node": ">=22.0.0" },
+  "workspaces": ["shared", "server", "web"],
+  "scripts": {
+    "postinstall": "npm run build -w shared",
+    "dev": "npm run build -w shared && concurrently -k -n shared,server,web -c blue,green,magenta \"npm:dev -w shared\" \"npm:dev -w server\" \"npm:dev -w web\"",
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w web",
+    "start": "npm run start -w server",
+    "seed": "npm run seed -w server",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w server && npm run typecheck -w web",
+    "test": "npm run test -w shared && npm run test -w server && npm run test -w web",
+    "test:e2e": "node --import tsx e2e/run.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "playwright": "^1.55.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,37 @@
+# Sobe o servidor da Creche Segura + Caddy (HTTPS automático).
+# 1) copie .env.example para .env e preencha;
+# 2) aponte o DNS do seu domínio para este servidor;
+# 3) edite DOMAIN abaixo (ou exporte a variável) e rode: docker compose up -d
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      HOST: 0.0.0.0
+      PORT: 3000
+    volumes:
+      - app-data:/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-creche.exemplo.com.br}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:
