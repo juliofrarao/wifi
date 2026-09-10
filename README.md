@@ -15,7 +15,7 @@ cabe num VPS barato ou num computador da própria creche.
 
 | Quem | O que faz no sistema |
 | --- | --- |
-| **Direção / secretaria** (`admin`) | Cadastra crianças, responsáveis e equipe; emite e imprime carteirinhas; vê relatórios, auditoria e o painel; lança a folha de papel; importa planilha; faz backup. |
+| **Direção / secretaria** (`admin`) | Cadastra crianças, responsáveis e equipe; emite e imprime carteirinhas; vê o painel, os alertas de exceção, relatórios e auditoria; lança a folha de papel; importa planilha; faz backup. |
 | **Vigilante / portaria** (`guard`) | Lê carteirinhas, confirma entradas e saídas, registra recusas e exceções, cancela um registro errado, vê quem está na creche e imprime a folha de presença. |
 | **Pais e responsáveis** (`guardian`) | Veem o status e o histórico dos filhos, recebem os alertas, autorizam alguém a buscar hoje, escolhem como querem ser avisados. |
 

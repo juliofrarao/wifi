@@ -980,10 +980,18 @@ export const BackfillBody = z.object({
           type: z.enum(['checkin', 'checkout']),
           guardianId: uuid.nullable().optional(),
           personName: z.string().trim().min(2).max(120).nullable().optional(),
+          /** One-off pickup authorization the person on the sheet was covered by (checkout without guardianId). */
+          authorizationId: uuid.nullable().optional(),
+          /** Acknowledge an exception (R2) for this row; requires a note of at least 10 characters. */
+          override: z.boolean().optional(),
           occurredAt: isoDateTime,
           note: z.string().trim().max(1000).nullable().optional(),
         })
         .refine((r) => r.guardianId || r.personName, { message: 'Informe o responsável ou o nome da pessoa', path: ['guardianId'] })
+        .refine((r) => !r.override || (r.note && r.note.length >= 10), {
+          message: 'A exceção exige uma observação de pelo menos 10 caracteres',
+          path: ['note'],
+        })
     )
     .min(1)
     .max(500),

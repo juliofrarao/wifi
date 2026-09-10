@@ -9,6 +9,19 @@ import { z } from 'zod';
 
 const emptyToUndefined = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v);
 const optStr = z.preprocess(emptyToUndefined, z.string().trim().optional());
+/**
+ * TRUST_PROXY: `false` (default), `true` (trust every hop — only behind a proxy that overwrites
+ * X-Forwarded-For, such as Caddy), a hop count such as `1` (recommended: the nearest proxy only)
+ * or a comma-separated list of proxy addresses/CIDRs (SEC-6).
+ */
+export function parseTrustProxy(raw: string | undefined): boolean | number | string[] {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (v === '' || v === 'false' || v === '0' || v === 'no' || v === 'off') return false;
+  if (v === 'true' || v === 'yes' || v === 'on') return true;
+  if (/^\d+$/.test(v)) return Number(v);
+  return v.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 const bool = z.preprocess((v) => {
   if (typeof v !== 'string') return v;
   const s = v.trim().toLowerCase();
@@ -21,7 +34,7 @@ const EnvSchema = z.object({
   APP_URL: optStr,
   PORT: int,
   HOST: optStr,
-  TRUST_PROXY: bool,
+  TRUST_PROXY: optStr,
   DATA_DIR: optStr,
   WEB_DIST: optStr,
   TZ: optStr,
@@ -64,7 +77,8 @@ export interface Config {
   appUrl: string;
   port: number;
   host: string;
-  trustProxy: boolean;
+  /** false, true, a hop count ("1") or a list of trusted proxy addresses/CIDRs (Fastify `trustProxy`). */
+  trustProxy: boolean | number | string[];
   /** Absolute path. */
   dataDir: string;
   /** Absolute path (may not exist in development). */
@@ -143,7 +157,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     appUrl,
     port: e.PORT ?? 3000,
     host: e.HOST ?? '0.0.0.0',
-    trustProxy: e.TRUST_PROXY ?? false,
+    trustProxy: parseTrustProxy(e.TRUST_PROXY),
     dataDir,
     webDist,
     tz,

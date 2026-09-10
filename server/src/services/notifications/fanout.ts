@@ -147,6 +147,8 @@ export function channelsFor(deps: Pick<NotifierDeps, 'emailEnabled' | 'pushEnabl
 
 export interface InsertSpec {
   userId: string;
+  /** Recipient role: admins open their alerts under /admin/alertas. */
+  role?: 'admin' | 'guard' | 'guardian';
   kind: NotificationKind;
   batchId: string | null;
   eventId: string | null;
@@ -175,7 +177,7 @@ export function insertNotificationRows(db: Db, spec: InsertSpec): string[] {
     const body = channel === 'push' ? spec.rendered.pushBody : spec.rendered.body;
     const payload =
       channel === 'push'
-        ? { url: `/alertas?n=${inappId ?? id}`, tag: spec.batchId ? `batch:${spec.batchId}` : `notification:${inappId ?? id}`, inappId }
+        ? { url: `${spec.role === 'admin' ? '/admin/alertas' : '/alertas'}?n=${inappId ?? id}`, tag: spec.batchId ? `batch:${spec.batchId}` : `notification:${inappId ?? id}`, inappId }
         : channel === 'email'
           ? { html: spec.rendered.html, subject: spec.rendered.subject, inappId }
           : null;
@@ -261,7 +263,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
     const checkinAt = sameDayCheckins(db, events, config.tz);
     const blocked = blockedDenied(db, events);
     const render = (subset: EventRow[]) =>
-      renderAttendance({ events: subset, daycare, authorizationLabels: labels, checkinAt, blockedEventIds: blocked, backfilledAt: opts.backfilledAt ?? null });
+      renderAttendance({ events: subset, daycare, authorizationLabels: labels, checkinAt, blockedEventIds: blocked, backfilledAt: opts.backfilledAt ?? null, today: todayCivil(config.tz, now) });
     const policy: ChannelPolicy = { kind, highlighted, lateBackfill: !!opts.backfilledAt, inappOnly: !!opts.inappOnly };
 
     tx(db, () => {
@@ -270,6 +272,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
         if (subset.length === 0) continue;
         insertNotificationRows(db, {
           userId: r.id,
+          role: r.role,
           kind,
           batchId,
           eventId: subset[0].id,
@@ -285,6 +288,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
         for (const r of adminRecipients(db, childIds)) {
           insertNotificationRows(db, {
             userId: r.id,
+            role: r.role,
             kind,
             batchId,
             eventId: events[0].id,
@@ -314,6 +318,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
       for (const r of recipients) {
         insertNotificationRows(db, {
           userId: r.id,
+          role: r.role,
           kind: 'void',
           batchId: null,
           eventId: event.id,
@@ -345,6 +350,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
       for (const r of guardianRecipients(db, [childId], [linkUserId])) {
         insertNotificationRows(db, {
           userId: r.id,
+          role: r.role,
           kind: 'guardian_added',
           batchId: null,
           eventId: null,
@@ -382,6 +388,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
       for (const r of guardianRecipients(db, [auth.child_id], exclude)) {
         insertNotificationRows(db, {
           userId: r.id,
+          role: r.role,
           kind: 'authorization_added',
           batchId: null,
           eventId: null,
@@ -408,6 +415,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
         const r = toRecipient(row, []);
         insertNotificationRows(db, {
           userId: r.id,
+          role: r.role,
           kind: 'credential_revoked',
           batchId: null,
           eventId: null,
@@ -425,6 +433,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
       for (const r of guardianRecipients(db, [cred.owner_id])) {
         insertNotificationRows(db, {
           userId: r.id,
+          role: r.role,
           kind: 'credential_revoked',
           batchId: null,
           eventId: null,
@@ -447,6 +456,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
       for (const r of adminRecipients(db, [])) {
         insertNotificationRows(db, {
           userId: r.id,
+          role: r.role,
           kind: 'system',
           batchId: null,
           eventId: null,

@@ -4,10 +4,10 @@
  * same kind. `issueInvite` also builds the InviteResult (e-mail, WhatsApp, QR).
  */
 import { randomUUID } from 'node:crypto';
-import { type InviteResult, formatDateTime, whatsappDigits } from '@creche/shared';
+import { type InviteResult, formatDateTime, todayCivil, whatsappDigits } from '@creche/shared';
 import type { Ctx } from '../context.js';
 import { type Db, one, run } from '../db/index.js';
-import { getSetting, SETTING_KEYS } from '../db/settings.js';
+import { countOutboundEmail, getSetting, SETTING_KEYS } from '../db/settings.js';
 import type { AuthTokenRow, UserRow } from '../db/rows.js';
 import { ApiError } from '../lib/errors.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
@@ -79,6 +79,17 @@ export interface IssueOptions {
  * requested/possible; a failed send is recorded in users.last_email_error and
  * yields `sent: false` (the admin still gets the link).
  */
+/** Pending (unused) invite/reset links die as soon as a password is established (SEC-7). */
+export function invalidateUserTokens(db: Db, userId: string): void {
+  run(db, 'DELETE FROM auth_tokens WHERE user_id = ? AND used_at IS NULL', userId);
+}
+
+/** True when an unused token of this kind was issued less than `maxAgeMs` ago (anti mail-bomb). */
+export function hasFreshToken(db: Db, userId: string, kind: 'invite' | 'reset', now: Date, maxAgeMs: number): boolean {
+  const since = new Date(now.getTime() - maxAgeMs).toISOString();
+  return !!one<{ id: string }>(db, 'SELECT id FROM auth_tokens WHERE user_id = ? AND kind = ? AND used_at IS NULL AND created_at >= ?', userId, kind, since);
+}
+
 export async function issueInvite(ctx: Ctx, user: UserRow, opts: IssueOptions): Promise<InviteResult> {
   const now = ctx.now();
   const { token, expiresAt } = createAuthToken(ctx.db, user.id, opts.kind, now);
@@ -90,6 +101,7 @@ export async function issueInvite(ctx: Ctx, user: UserRow, opts: IssueOptions): 
     try {
       await ctx.mailer.send({ to: user.email, replyTo: getSetting(ctx.db, SETTING_KEYS.contactEmail), ...mail });
       sent = true;
+      countOutboundEmail(ctx.db, todayCivil(ctx.config.tz, now));
       run(ctx.db, 'UPDATE users SET last_email_error = NULL WHERE id = ?', user.id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

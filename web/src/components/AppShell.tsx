@@ -130,6 +130,7 @@ export function GuardianShell({ children, title, headerActions }: { children: Re
 
 export const ADMIN_NAV: NavItem[] = [
   { to: '/admin', label: 'Painel', icon: '📊', end: true },
+  { to: '/admin/alertas', label: 'Alertas', icon: '🔔' },
   { to: '/admin/criancas', label: 'Crianças', icon: '🧒' },
   { to: '/admin/responsaveis', label: 'Responsáveis', icon: '👪' },
   { to: '/admin/equipe', label: 'Equipe', icon: '🛡️' },

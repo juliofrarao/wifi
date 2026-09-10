@@ -14,7 +14,7 @@ import { ApiError } from '../lib/errors.js';
 import { photoUrl, storePhoto } from '../lib/photos.js';
 import { parse, queryBool, queryStr } from '../lib/validate.js';
 import { anonymizeUser, getUser } from '../services/anonymize.js';
-import { issueInvite } from '../services/invites.js';
+import { invalidateUserTokens, issueInvite } from '../services/invites.js';
 import { assertEmailFree, assertLoginFree, assertPasswordStrength, insertUser } from '../services/users.js';
 import { readUploadedFile } from './upload.js';
 
@@ -120,6 +120,7 @@ export function registerUserRoutes(api: FastifyInstance, ctx: Ctx): void {
       );
       if (passwordHash) {
         run(db, 'UPDATE users SET password_hash = ?, password_set_at = ?, last_email_error = NULL WHERE id = ?', passwordHash, now.toISOString(), user.id);
+        invalidateUserTokens(db, user.id);
         revokeUserSessions(db, user.id);
         revokeUserPushSubscriptions(db, user.id);
       }

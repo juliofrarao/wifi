@@ -59,10 +59,15 @@ export function parseCsv(input: string | Buffer, delimiter = ';'): string[][] {
   return rows.filter((r) => r.some((c) => c.trim() !== ''));
 }
 
+/** Cells starting with = + - @ or a tab/CR are formulas for Excel/LibreOffice: neutralize them. */
+const FORMULA_START = /^[\s]*[=+\-@\t\r]/;
+
 export function csvEscape(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return '';
-  const s = String(value);
-  return /[";\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  let s = String(value);
+  const prefixed = typeof value === 'string' && FORMULA_START.test(s);
+  if (prefixed) s = `'${s}`;
+  return prefixed || /[";\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 /** Rows → CSV text with BOM, `;` and CRLF (the format the spec mandates). */

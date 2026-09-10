@@ -312,10 +312,12 @@ um botão separado).
 - **R2 (quem pode retirar).** `checkout` permitido sem exceção quando o
   responsável tem vínculo ativo, não bloqueado, com `canPickup` e dentro de
   `validFrom..validUntil` (dia civil no fuso da creche), **ou** quando
-  `authorizationId` aponta para uma autorização avulsa da criança válida hoje.
-  Caso contrário exige `override: true` + `note` (≥ 10) e, para pessoa não
-  cadastrada, `personName`. Vínculo `blocked` → recusa mesmo com override
-  (`GUARDIAN_BLOCKED`).
+  `authorizationId` aponta para uma autorização avulsa da criança válida hoje
+  **e o evento é da própria pessoa autorizada** (`personName`, sem
+  `guardianId`) — uma autorização avulsa nunca amplia o que um responsável
+  cadastrado pode fazer. Caso contrário exige `override: true` + `note` (≥ 10)
+  e, para pessoa não cadastrada, `personName`. Vínculo `blocked` → recusa mesmo
+  com override (`GUARDIAN_BLOCKED`).
 - **R3 (entrada).** `checkin` aceita qualquer responsável vinculado (inclusive
   bloqueado — sem risco de retirada) ou `personName`; nunca bloqueia.
 - **R4 (idempotência).** Chave = `clientId` (um por criança, UUID gerado pelo
@@ -447,7 +449,8 @@ com sessão de portaria aberta em outra aba, envia o código pelo
 `/inicio`, `/alertas`, `/filho/:id`, `/config`, `/admin`, `/admin/criancas`,
 `/admin/criancas/:id`, `/admin/responsaveis`, `/admin/responsaveis/:id`,
 `/admin/equipe`, `/admin/carteirinhas`, `/admin/carteirinhas/imprimir`,
-`/admin/relatorios`, `/admin/lancar`, `/admin/importar`, `/admin/auditoria`,
+`/admin/alertas` (exceções, conflitos, recusas e avisos do sistema para a
+direção), `/admin/relatorios`, `/admin/lancar`, `/admin/importar`, `/admin/auditoria`,
 `/admin/configuracoes`. O servidor devolve `index.html` para tudo que não é
 `/api/*`, `/sw.js`, `/manifest.webmanifest`, `/assets/*`.
 
@@ -597,7 +600,7 @@ Mapa HTTP: `VALIDATION`, `INVALID_TOKEN`, `TOKEN_EXPIRED`, `OCCURRED_AT_INVALID`
 | `POST /scan/heartbeat` | guard, admin | `HeartbeatBody` → 204 |
 | `POST /attendance/events` | guard, admin | `CreateEventsBody` → `CreateEventsResult` |
 | `POST /attendance/events/:id/void` | guard (≤ 24 h), admin | `VoidEventBody` → `AttendanceEventDTO` |
-| `POST /attendance/backfill` | admin | `BackfillBody` → `CreateEventsResult` |
+| `POST /attendance/backfill` | admin | `BackfillBody` → `CreateEventsResult` (linhas podem trazer `authorizationId` — saída por autorização avulsa, sem exceção — e `override` + `note` ≥ 10 para lançar uma exceção) |
 | `GET /attendance/today` | guard, admin | `TodaySummary` |
 | `GET /attendance/events` | guard (≤ 7 dias), admin, guardian (`childId` próprio obrigatório) | `EventsQuery` → `EventsPage` |
 | `GET /attendance/events.csv` | admin | CSV (ver abaixo) |

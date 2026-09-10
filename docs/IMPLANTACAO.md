@@ -160,7 +160,7 @@ levar alguns segundos enquanto o Caddy emite o certificado.
    docker compose up -d --build app
    ```
 
-`TRUST_PROXY` já vem como `true` no compose, então os limites por IP usam o
+`TRUST_PROXY` já vem como `1` no compose (um salto: o Caddy), então os limites por IP usam o
 endereço real do visitante em vez do IP do túnel/proxy.
 
 ### 3.4 Comandos do dia a dia
@@ -192,7 +192,7 @@ depois não tem efeito.
 | `DOMAIN` | `creche.exemplo.com.br` | Só para o Caddy do `docker-compose.yml`: o domínio para o qual ele emite o certificado. Deve ser o mesmo host de `APP_URL`. |
 | `PORT` | `3000` | Porta em que o servidor escuta. No Docker deixe 3000. |
 | `HOST` | `0.0.0.0` | Endereço de escuta. `127.0.0.1` restringe ao próprio computador (útil sem Docker com Caddy na mesma máquina). |
-| `TRUST_PROXY` | `false` | `true` quando há Caddy, Nginx ou Cloudflare na frente: o servidor passa a usar `X-Forwarded-For` para saber o IP real (limites de tentativas de login por IP e auditoria). O compose já força `true`. |
+| `TRUST_PROXY` | `false` | Quantos saltos de proxy confiar para achar o IP real em `X-Forwarded-For` (limites de login por IP e auditoria). Use `1` com um único proxy na frente (Caddy, Nginx ou o túnel da Cloudflare — o compose já força `1`); `true` confia em todos os saltos e só é seguro atrás do Caddy, que reescreve o cabeçalho; também aceita uma lista de endereços/CIDRs. |
 | `DATA_DIR` | `./data` (relativo à pasta `server/`) | Onde ficam `creche.sqlite`, `uploads/` e `backups/`. No Docker é `/data` (montado de `./data`). |
 | `WEB_DIST` | `../web/dist` | Pasta do app compilado que o servidor serve. No Docker é `/app/web/dist`. Em desenvolvimento não é usada (o Vite serve o app). |
 | `TZ` | `America/Sao_Paulo` | Fuso horário da creche. Define o "dia" dos relatórios, o horário do backup (02:00) e as horas mostradas nos alertas. Precisa ser um nome válido da base IANA; o servidor recusa iniciar com um valor desconhecido. |
@@ -487,7 +487,7 @@ Para quem prefere rodar direto no sistema (Ubuntu/Debian):
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs build-essential python3
 # projeto
 git clone <url> /opt/creche-segura && cd /opt/creche-segura
-cp .env.example .env && nano .env        # DATA_DIR=/var/lib/creche-segura, HOST=127.0.0.1, TRUST_PROXY=true
+cp .env.example .env && nano .env        # DATA_DIR=/var/lib/creche-segura, HOST=127.0.0.1, TRUST_PROXY=1
 npm ci && npm run build
 sudo mkdir -p /var/lib/creche-segura && sudo chown $USER /var/lib/creche-segura
 npm start                                 # teste; Ctrl+C para parar

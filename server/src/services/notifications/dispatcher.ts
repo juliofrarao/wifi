@@ -14,7 +14,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { type PushPayload, todayCivil } from '@creche/shared';
 import type { Config } from '../../config.js';
 import { type Db, all, one, run } from '../../db/index.js';
-import { getSetting, SETTING_KEYS, setSetting } from '../../db/settings.js';
+import { getSetting, SETTING_KEYS, setSetting, outboundEmailsOn } from '../../db/settings.js';
 import type { NotificationRow, PushSubscriptionRow } from '../../db/rows.js';
 import { civilDayRange } from '../../lib/time.js';
 import { type Mailer, isTransientMailError, subjectPrefix } from '../email.js';
@@ -59,10 +59,12 @@ function payloadOf(row: NotificationRow): Payload {
   }
 }
 
-/** E-mails sent today (daycare civil day). */
+/** E-mails sent today (daycare civil day): notification rows plus invites/resets/tests. */
 export function emailsSentToday(db: Db, config: Config, now: Date): number {
-  const [start, end] = civilDayRange(todayCivil(config.tz, now), config.tz);
-  return one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM notifications WHERE channel = 'email' AND status = 'sent' AND sent_at >= ? AND sent_at < ?`, start, end)?.n ?? 0;
+  const today = todayCivil(config.tz, now);
+  const [start, end] = civilDayRange(today, config.tz);
+  const rows = one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM notifications WHERE channel = 'email' AND status = 'sent' AND sent_at >= ? AND sent_at < ?`, start, end)?.n ?? 0;
+  return rows + outboundEmailsOn(db, today);
 }
 
 function markSent(db: Db, row: NotificationRow, now: Date): void {

@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router';
 import type { NotificationDTO, NotificationKind } from '@creche/shared';
 import { getMyNotifications, markNotificationsRead } from '../../api/endpoints';
 import { describeError } from '../../api/client';
-import { GuardianShell } from '../../components/AppShell';
+import { AdminShell, GuardianShell } from '../../components/AppShell';
 import { Banner } from '../../components/Banner';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
@@ -26,8 +26,12 @@ const KIND_ICON: Record<NotificationKind, string> = {
   system: 'ℹ️',
 };
 
-export function AlertasPage() {
+/** Guardian feed; with `admin` it renders inside the admin shell (exceptions, conflicts, quota warnings). */
+export function AlertasPage({ admin = false }: { admin?: boolean }) {
   const fmt = useFormat();
+  const Shell = admin ? AdminShell : GuardianShell;
+  const alertsPath = admin ? '/admin/alertas' : '/alertas';
+  const childLink = (childId: string) => (admin ? `/admin/criancas/${childId}?tab=historico` : `/filho/${childId}`);
   const [params] = useSearchParams();
   const focusId = params.get('n');
   const [items, setItems] = useState<NotificationDTO[]>([]);
@@ -106,11 +110,11 @@ export function AlertasPage() {
   };
 
   return (
-    <GuardianShell
+    <Shell
       title="Alertas"
       headerActions={
         <>
-          <AlertsBadge unread={unread} />
+          <AlertsBadge unread={unread} to={alertsPath} />
           <LogoutButton />
         </>
       }
@@ -131,7 +135,7 @@ export function AlertasPage() {
         {loading ? <Spinner block label="Carregando alertas…" /> : null}
         {!loading && items.length === 0 && !error ? (
           <EmptyState icon="🔔" title="Nenhum alerta ainda">
-            Você receberá aqui os avisos de entrada e saída dos seus filhos.
+            {admin ? 'Exceções, conflitos da fila, recusas e avisos do sistema aparecem aqui.' : 'Você receberá aqui os avisos de entrada e saída dos seus filhos.'}
           </EmptyState>
         ) : null}
         <div className="list" data-testid="alerts-list" ref={listRef}>
@@ -157,7 +161,7 @@ export function AlertasPage() {
                     {fmt.dateTime(n.createdAt)}
                   </time>
                   {childId ? (
-                    <Link to={`/filho/${childId}`} className="small">
+                    <Link to={childLink(childId)} className="small">
                       Ver histórico ›
                     </Link>
                   ) : null}
@@ -172,6 +176,6 @@ export function AlertasPage() {
           </Button>
         ) : null}
       </div>
-    </GuardianShell>
+    </Shell>
   );
 }

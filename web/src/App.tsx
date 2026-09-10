@@ -87,6 +87,7 @@ export function App() {
 
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<PainelPage />} />
+        <Route path="alertas" element={<AlertasPage admin />} />
         <Route path="criancas" element={<CriancasPage />} />
         <Route path="criancas/:id" element={<CriancaPage />} />
         <Route path="responsaveis" element={<ResponsaveisPage />} />

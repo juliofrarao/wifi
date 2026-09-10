@@ -3,7 +3,7 @@ import type { AuthResult, Role, UserDTO } from '@creche/shared';
 import { ApiError, AUTH_EXPIRED_EVENT, clearToken, getToken, isApiError, setToken } from '../api/client';
 import { getMe, login as loginRequest, logout as logoutRequest } from '../api/endpoints';
 import { STORAGE_KEYS, readJson, writeJson } from '../lib/storage';
-import { unsubscribePush } from '../lib/push';
+import { syncPushSubscription, unsubscribePush } from '../lib/push';
 import { getQueueCounts, retryNeedsLogin } from '../gate/queue';
 import { clearDirectory } from '../gate/directory';
 
@@ -71,7 +71,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refreshUser();
     const onExpired = () => adopt(null);
     window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
-    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    // The service worker re-subscribed after the browser rotated the endpoint (SW-1).
+    const onSwMessage = (ev: MessageEvent) => {
+      if (ev.data && typeof ev.data === 'object' && (ev.data as { type?: string }).type === 'push-resubscribed') void syncPushSubscription();
+    };
+    navigator.serviceWorker?.addEventListener('message', onSwMessage);
+    // Sessions come and go; the browser subscription may outlive the server's copy (PUSH-1).
+    if (getToken()) void syncPushSubscription();
+    return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+      navigator.serviceWorker?.removeEventListener('message', onSwMessage);
+    };
   }, [refreshUser, adopt]);
 
   const setSession = useCallback(
@@ -80,6 +90,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       adopt(result.user);
       // Items parked with needs_login can be sent again.
       void retryNeedsLogin();
+      // A new session: make sure the server knows this device's push subscription (PUSH-1).
+      void syncPushSubscription();
     },
     [adopt]
   );

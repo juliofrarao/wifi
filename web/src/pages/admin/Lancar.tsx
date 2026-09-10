@@ -186,7 +186,7 @@ export function LancarPage() {
           </Button>
         </div>
         <p className="tiny muted">
-          Saída de pessoa fora da lista não é possível pela folha sem autorização — registre pela portaria como exceção, ou cadastre a autorização avulsa antes.
+          Saída por autorização avulsa é lançada normalmente. Saída por "outra pessoa" ou por responsável sem permissão é lançada como exceção: escreva o motivo na observação (mínimo 10 caracteres) — os responsáveis e a direção recebem o alerta destacado.
         </p>
       </div>
     </AdminShell>

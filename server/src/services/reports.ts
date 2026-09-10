@@ -65,7 +65,8 @@ export function dailyReport(ctx: ReportCtx, date: string, now: Date): DailyRepor
     const checkin = firstCheckin.get(c.id) ?? null;
     const checkout = lastCheckout.get(c.id) ?? null;
     if (!checkin && !checkout) {
-      if (c.active) absentIds.push(c);
+      // Children enrolled after the report date were not absent that day (ATT-6).
+      if (c.active && civilDate(c.created_at, tz) <= date) absentIds.push(c);
       continue;
     }
     rows.push({

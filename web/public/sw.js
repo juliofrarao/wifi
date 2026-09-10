@@ -248,17 +248,40 @@ self.addEventListener('notificationclick', (event) => {
     (async () => {
       const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of all) {
-        if (new URL(client.url).origin === self.location.origin) {
-          try {
-            if ('navigate' in client) await client.navigate(target);
-          } catch {
-            /* navigation may be refused for uncontrolled clients */
+        if (new URL(client.url).origin !== self.location.origin) continue;
+        try {
+          // Only a client that actually navigated to the alert is good enough (SW-2);
+          // otherwise fall through to opening a new window with the deep link.
+          if ('navigate' in client) {
+            const navigated = await client.navigate(target);
+            if (navigated && 'focus' in navigated) await navigated.focus();
+            else if ('focus' in client) await client.focus();
+            return;
           }
-          if ('focus' in client) await client.focus();
-          return;
+        } catch {
+          /* navigation refused (uncontrolled client): try the next one */
         }
       }
       await self.clients.openWindow(target);
+    })()
+  );
+});
+
+// The browser rotated/expired the subscription: re-subscribe with the same key and let the
+// open app (if any) register it; otherwise the app re-registers on its next start (SW-1).
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      const old = event.oldSubscription;
+      const key = old && old.options ? old.options.applicationServerKey : null;
+      if (!key) return;
+      try {
+        await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      } catch {
+        return;
+      }
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clients) client.postMessage({ type: 'push-resubscribed' });
     })()
   );
 });

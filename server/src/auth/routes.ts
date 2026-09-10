@@ -17,14 +17,16 @@ import { audit } from '../lib/audit.js';
 import { hashPassword, verifyPassword } from '../lib/crypto.js';
 import { ApiError, rateLimited } from '../lib/errors.js';
 import { photoUrl } from '../lib/photos.js';
-import { LIMITS, assertNotLimited, clearFailures, identifierKey, ipKey, recordFailure } from '../lib/ratelimit.js';
+import { LIMITS, assertNotLimited, clearFailures, forgotKey, identifierKey, ipKey, pinKey, recordFailure } from '../lib/ratelimit.js';
 import { parse } from '../lib/validate.js';
-import { issueInvite, markTokenUsed, resolveAuthToken } from '../services/invites.js';
+import { hasFreshToken, invalidateUserTokens, issueInvite, markTokenUsed, resolveAuthToken } from '../services/invites.js';
 import { assertPasswordStrength, findUserByIdentifier } from '../services/users.js';
 import { actorOf, authOf, requireAuth, requireRole } from './plugin.js';
 import { createSession, revokeSession, revokeUserPushSubscriptions, revokeUserSessions, incrementSwitchFailures } from './sessions.js';
 
 const MAX_SWITCH_FAILURES = 5;
+/** A reset link requested less than this ago is not re-issued (keeps the victim's link valid; no mail-bombing). */
+const FORGOT_REISSUE_MS = 2 * 60 * 1000;
 
 export function registerAuthRoutes(api: FastifyInstance, ctx: Ctx): void {
   const { db, config } = ctx;
@@ -78,6 +80,7 @@ export function registerAuthRoutes(api: FastifyInstance, ctx: Ctx): void {
     tx(db, () => {
       run(db, 'UPDATE users SET password_hash = ?, password_set_at = ?, updated_at = ? WHERE id = ?', hash, now.toISOString(), now.toISOString(), user.id);
       revokeUserSessions(db, user.id, session.id);
+      invalidateUserTokens(db, user.id);
       audit(db, actorOf(req), 'user.password_change', 'user', user.id, null, req.ip, now);
     });
     return reply.code(204).send();
@@ -92,11 +95,17 @@ export function registerAuthRoutes(api: FastifyInstance, ctx: Ctx): void {
     const body = parse(AcceptInviteBody, req.body);
     const now = req.now;
     const { row, user } = resolveAuthToken(db, 'invite', body.token, now);
+    // An invite only activates an account that has no password yet; once one exists (set by the
+    // office or by the user), an old invite link must not take the account over (SEC-7).
+    if (user.password_hash) throw new ApiError('INVALID_TOKEN', 'Este convite já foi utilizado. Entre com sua senha ou peça um novo link para a creche.');
     assertPasswordStrength(body.password, user.role);
     const hash = await hashPassword(body.password);
     const result = tx(db, () => {
       run(db, 'UPDATE users SET password_hash = ?, password_set_at = ?, updated_at = ? WHERE id = ?', hash, now.toISOString(), now.toISOString(), user.id);
       markTokenUsed(db, row.id, now);
+      invalidateUserTokens(db, user.id);
+      revokeUserSessions(db, user.id);
+      revokeUserPushSubscriptions(db, user.id);
       const fresh = one<UserRow>(db, 'SELECT * FROM users WHERE id = ?', user.id)!;
       audit(db, { id: user.id, name: user.name }, 'user.invite_accept', 'user', user.id, null, req.ip, now);
       return authResult(fresh, ua(req.headers['user-agent']), now);
@@ -106,11 +115,21 @@ export function registerAuthRoutes(api: FastifyInstance, ctx: Ctx): void {
 
   api.post('/auth/forgot-password', async (req, reply) => {
     const body = parse(ForgotPasswordBody, req.body);
+    const now = req.now;
+    // Every call counts (not only failures): 3 per identifier and 20 per IP per 15 min (SEC-2).
+    const fKey = forgotKey(body.identifier);
+    const ipK = ipKey(req.ip);
+    assertNotLimited(db, fKey, LIMITS.forgotIdentifier, now);
+    assertNotLimited(db, ipK, LIMITS.loginIp, now);
+    recordFailure(db, fKey, now);
+    recordFailure(db, ipK, now);
     const user = findUserByIdentifier(db, body.identifier);
-    if (user && user.active && user.email) {
-      // Only users with an e-mail can self-reset; nothing is revealed either way.
-      await issueInvite(ctx, user, { kind: 'reset', send: true });
-      audit(db, null, 'auth.forgot_password', 'user', user.id, null, req.ip, req.now);
+    if (user && user.active && user.email && !hasFreshToken(db, user.id, 'reset', now, FORGOT_REISSUE_MS)) {
+      // Only users with an e-mail can self-reset; nothing is revealed either way. The token is
+      // created synchronously; the SMTP round-trip happens after the 204 so response time does
+      // not depend on (or reveal) whether the identifier exists.
+      audit(db, null, 'auth.forgot_password', 'user', user.id, null, req.ip, now);
+      void issueInvite(ctx, user, { kind: 'reset', send: true }).catch((err) => req.log.warn({ err, userId: user.id }, 'falha ao enviar e-mail de redefinição'));
     }
     return reply.code(204).send();
   });
@@ -129,6 +148,7 @@ export function registerAuthRoutes(api: FastifyInstance, ctx: Ctx): void {
     const result = tx(db, () => {
       run(db, 'UPDATE users SET password_hash = ?, password_set_at = ?, updated_at = ? WHERE id = ?', hash, now.toISOString(), now.toISOString(), user.id);
       markTokenUsed(db, row.id, now);
+      invalidateUserTokens(db, user.id);
       revokeUserSessions(db, user.id);
       revokeUserPushSubscriptions(db, user.id);
       const fresh = one<UserRow>(db, 'SELECT * FROM users WHERE id = ?', user.id)!;
@@ -151,14 +171,20 @@ export function registerAuthRoutes(api: FastifyInstance, ctx: Ctx): void {
     const { user: current, session } = authOf(req);
     const now = req.now;
     if (session.switch_failures >= MAX_SWITCH_FAILURES) throw rateLimited(15 * 60);
+    // The lock also follows the TARGET guard, so switching sessions does not reset it (SEC-1).
+    const pinK = pinKey(body.userId);
+    assertNotLimited(db, pinK, LIMITS.pinTarget, now);
     const target = one<UserRow>(db, `SELECT * FROM users WHERE id = ? AND role = 'guard' AND active = 1 AND anonymized_at IS NULL`, body.userId);
     if (!target || !target.pin_hash) throw new ApiError('NOT_FOUND', 'Vigilante não encontrado');
     const ok = await verifyPassword(body.pin, target.pin_hash);
     if (!ok) {
+      recordFailure(db, pinK, now);
+      audit(db, { id: current.id, name: current.name }, 'auth.switch_failed', 'user', target.id, { from: current.id }, req.ip, now);
       const failures = incrementSwitchFailures(db, session.id);
       if (failures >= MAX_SWITCH_FAILURES) throw rateLimited(15 * 60);
       throw new ApiError('INVALID_PIN');
     }
+    clearFailures(db, pinK);
     const result = tx(db, () => {
       const r = authResult(target, ua(req.headers['user-agent']), now);
       revokeSession(db, session.id);

@@ -175,8 +175,11 @@ export function kickQueue(_reason: string, immediate = false): void {
 
 async function sendHeartbeat(force: boolean): Promise<void> {
   if (!getToken()) return;
-  // Only gate sessions (guard/admin) may report; a guardian session would get a 403.
-  if (readJson<{ role?: string }>(STORAGE_KEYS.user)?.role === 'guardian') return;
+  // Only gate sessions report: guards always, admins only while using the gate screens
+  // (a guardian session would get a 403; an admin on the panel is not a gate).
+  const role = readJson<{ role?: string }>(STORAGE_KEYS.user)?.role;
+  if (role === 'guardian') return;
+  if (role === 'admin' && !window.location.pathname.startsWith('/portaria')) return;
   const nowMs = Date.now();
   if (!force && nowMs - lastHeartbeatAt < 30_000) return;
   lastHeartbeatAt = nowMs;

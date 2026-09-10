@@ -12,7 +12,7 @@ import { TextField } from '../../components/TextField';
 import { useToast } from '../../components/Toast';
 import { useConfig } from '../../config/ConfigProvider';
 import { emptyToNull, issuesFromError, formError, validateWith, type FieldErrors } from '../../lib/form';
-import { getPushSubscription, subscribePush, unsubscribePush } from '../../lib/push';
+import { subscribePush, syncPushSubscription, unsubscribePush } from '../../lib/push';
 import { isIos, isStandalone, supportsPush } from '../../lib/ua';
 import { useAsync } from '../../lib/useAsync';
 import { LogoutButton } from '../LogoutButton';
@@ -36,9 +36,9 @@ export function PushSection({ compact = false }: { compact?: boolean }) {
       setState('denied');
       return;
     }
-    const sub = await getPushSubscription();
-    setState(sub ? 'on' : 'off');
-  }, []);
+    // Re-registers the browser subscription on the server (idempotent) and only then says "on".
+    setState(await syncPushSubscription(config.vapidPublicKey));
+  }, [config.vapidPublicKey]);
 
   useEffect(() => {
     void check();

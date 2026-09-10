@@ -215,3 +215,64 @@ test('child filters', () => {
   assert.equal(hasReachableGuardian(kids[0]), true);
   assert.equal(hasReachableGuardian(kids[1]), false);
 });
+
+test('buildBackfillRows sends authorizationId for one-off authorizations and marks exceptions (ATT-1/ATT-4)', () => {
+  const noPickup = { ...guardian, id: 'g3', name: 'José', relationship: 'pai' as const, relationshipLabel: 'Pai', canPickup: false, pickupAllowedNow: false };
+  const c = child({
+    guardians: [guardian, noPickup],
+    authorizations: [
+      {
+        id: 'a1',
+        childId: 'c1',
+        personName: 'Vizinha',
+        personDocument: null,
+        relationshipLabel: 'vizinha',
+        phone: null,
+        validFrom: '2026-09-10',
+        validUntil: '2026-09-10',
+        note: null,
+        createdBy: { id: 'g1', name: 'Maria', relationshipLabel: 'Mãe' },
+        createdAt: '2026-09-09T00:00:00.000Z',
+        revokedAt: null,
+        validNow: true,
+      },
+    ],
+  });
+  const opts = new Map([['c1', personOptions(c, '2026-09-10')]]);
+  const byGuardian = opts.get('c1')!.find((o) => o.value === 'g:g3')!;
+  assert.equal(byGuardian.allowed, false);
+  assert.match(byGuardian.label, /sem permissão/);
+  let n = 0;
+  const newId = () => `id-${++n}`;
+
+  // Authorized person: normal checkout carrying the authorization id, no override.
+  const ok = buildBackfillRows([{ ...emptyRow('c1'), checkinTime: '08:00', checkinWho: 'g:g1', checkoutTime: '17:00', checkoutWho: 'a:a1' }], opts, '2026-09-10', tz, null, newId);
+  assert.deepEqual(ok.errors, {});
+  const out = ok.rows.find((r) => r.type === 'checkout')!;
+  assert.equal(out.authorizationId, 'a1');
+  assert.equal(out.personName, 'Vizinha');
+  assert.equal(out.override, undefined);
+
+  // Guardian without permission: refused without a reason, exception with one.
+  const noReason = buildBackfillRows([{ ...emptyRow('c1'), checkoutTime: '17:00', checkoutWho: 'g:g3' }], opts, '2026-09-10', tz, 'curto', newId);
+  assert.match(noReason.errors['c1.checkout'], /motivo/);
+  assert.equal(noReason.rows.length, 0);
+  const withReason = buildBackfillRows([{ ...emptyRow('c1'), checkoutTime: '17:00', checkoutWho: 'g:g3' }], opts, '2026-09-10', tz, 'Mãe autorizou por telefone', newId);
+  assert.deepEqual(withReason.errors, {});
+  assert.equal(withReason.rows[0].override, true);
+  assert.equal(withReason.rows[0].guardianId, 'g3');
+  assert.equal(withReason.rows[0].note, 'Mãe autorizou por telefone');
+
+  // "Other person" on a checkout is always an exception; on a checkin it never is.
+  const other = buildBackfillRows(
+    [{ ...emptyRow('c1'), checkinTime: '08:00', checkinWho: OTHER_PERSON, checkinOther: 'Tia Rosa', checkoutTime: '17:00', checkoutWho: OTHER_PERSON, checkoutOther: 'Tia Rosa' }],
+    opts,
+    '2026-09-10',
+    tz,
+    'Direção ciente, mãe ligou',
+    newId
+  );
+  assert.deepEqual(other.errors, {});
+  assert.equal(other.rows.find((r) => r.type === 'checkin')!.override, undefined);
+  assert.equal(other.rows.find((r) => r.type === 'checkout')!.override, true);
+});

@@ -332,7 +332,9 @@ export function createEvents(ctx: AttendanceCtx, actor: Actor, body: CreateEvent
       if (body.type === 'checkout') {
         const civil = civilDate(occurredAt, tz);
         const allowedByLink = !!guardian && !!link && link.u_active === 1 && linkAllowsPickupNow(link, civil);
-        const allowedByAuth = !!auth && authorizationCovers(auth, child.id, occurredAt, tz);
+        // A one-off authorization only covers the authorized (unregistered) person; it never
+        // widens what a registered guardian may do (ATT-2).
+        const allowedByAuth = !guardian && !!auth && authorizationCovers(auth, child.id, occurredAt, tz);
         if (!allowedByLink && !allowedByAuth) {
           if (body.override && note && note.length >= 10) override = 1;
           else {
@@ -426,7 +428,19 @@ export function createEvents(ctx: AttendanceCtx, actor: Actor, body: CreateEvent
     if (createdIds.length === 0) return { batchId, undoUntil: null, results, warnings };
     const undoUntil = plusMsIso(now, config.notifyHoldSeconds * 1000);
     const late = backfill && now.getTime() - new Date(occurredAt).getTime() > LATE_BACKFILL_MS;
-    ctx.notifier.attendanceBatch(batchId, { dispatchAfter: undoUntil, backfilledAt: late ? nowIso : null });
+    // A replay (R4) that creates events the first attempt rejected must still notify them:
+    // rows keyed (user, batch, channel) already exist for the original batch, so the new
+    // events get a batch of their own (ATT-3).
+    let notifyBatchId = batchId;
+    if (existingByClient.size > 0) {
+      const notified = one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM notifications WHERE batch_id = ?', batchId)?.n ?? 0;
+      if (notified > 0) {
+        notifyBatchId = randomUUID();
+        run(db, `UPDATE attendance_events SET batch_id = ? WHERE id IN (${placeholders(createdIds.length)})`, notifyBatchId, ...createdIds);
+        for (const r of results) if (r.status === 'created' && r.event) r.event.batchId = notifyBatchId;
+      }
+    }
+    ctx.notifier.attendanceBatch(notifyBatchId, { dispatchAfter: undoUntil, backfilledAt: late ? nowIso : null });
     if (backfill) {
       audit(db, { id: actor.user.id, name: actor.user.name }, 'attendance.backfill', 'attendance_event', batchId, { type: body.type, occurredAt, created: createdIds.length }, actor.ip, now);
     }
@@ -453,27 +467,29 @@ export function voidEvent(ctx: AttendanceCtx, actor: Actor, eventId: string, rea
     audit(db, { id: actor.user.id, name: actor.user.name }, 'event.void', 'attendance_event', event.id, { reason, batchId: event.batch_id, childId: event.child_id, type: event.type }, actor.ip, now);
 
     const delivered = one<{ n: number }>(db, `SELECT COUNT(*) AS n FROM notifications WHERE batch_id = ? AND status = 'sent'`, event.batch_id)?.n ?? 0;
-    if (delivered === 0) {
-      // Still inside the hold window (or nothing was ever delivered): no alert about this event goes out.
-      const pending = all<{ id: string; dispatch_after: string }>(db, `SELECT id, dispatch_after FROM notifications WHERE batch_id = ? AND status = 'pending'`, event.batch_id);
-      const remaining = one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM attendance_events WHERE batch_id = ? AND voided_at IS NULL', event.batch_id)?.n ?? 0;
-      if (remaining === 0) {
-        run(db, `UPDATE notifications SET status = 'skipped', error = 'voided' WHERE batch_id = ? AND status = 'pending'`, event.batch_id);
-      } else if (pending.length > 0) {
-        // Siblings remain: regenerate the pending rows for them, keeping the original hold.
-        run(db, `DELETE FROM notifications WHERE batch_id = ? AND status = 'pending'`, event.batch_id);
-        ctx.notifier.attendanceBatch(event.batch_id, { dispatchAfter: pending[0].dispatch_after });
-      }
-    } else {
-      // Alerts were delivered: nothing more about this event is sent; the guardians get "Registro cancelado".
-      run(
-        db,
-        `UPDATE notifications SET status = 'skipped', error = 'voided' WHERE batch_id = ? AND status = 'pending' AND child_ids LIKE ?`,
-        event.batch_id,
-        `%"${event.child_id}"%`
-      );
-      ctx.notifier.eventVoided(event.id, actor.user.id, reason);
+    const remaining = all<EventRow>(db, 'SELECT * FROM attendance_events WHERE batch_id = ? AND voided_at IS NULL', event.batch_id);
+    // Pending rows (hold window or retrying) that still mention this child must never go out as they are.
+    const pending = all<{ id: string; dispatch_after: string }>(
+      db,
+      `SELECT id, dispatch_after FROM notifications WHERE batch_id = ? AND status = 'pending' AND child_ids LIKE ? ORDER BY dispatch_after ASC`,
+      event.batch_id,
+      `%"${event.child_id}"%`
+    );
+    if (remaining.length === 0) {
+      run(db, `UPDATE notifications SET status = 'skipped', error = 'voided' WHERE batch_id = ? AND status = 'pending'`, event.batch_id);
+    } else if (pending.length > 0) {
+      // Siblings remain: regenerate those rows for the surviving events only, keeping the
+      // original hold instant and the original channel policy (late backfill / automatic).
+      run(db, `DELETE FROM notifications WHERE id IN (${placeholders(pending.length)})`, ...pending.map((p) => p.id));
+      const late = remaining.some((e) => e.method === 'manual' && new Date(e.created_at).getTime() - new Date(e.occurred_at).getTime() > LATE_BACKFILL_MS);
+      ctx.notifier.attendanceBatch(event.batch_id, {
+        dispatchAfter: pending[0].dispatch_after,
+        backfilledAt: late ? remaining[0].created_at : null,
+        inappOnly: remaining.every((e) => e.method === 'auto'),
+      });
     }
+    // Alerts already delivered: the guardians (and admins, when highlighted) get "Registro cancelado".
+    if (delivered > 0) ctx.notifier.eventVoided(event.id, actor.user.id, reason);
     return getEvent(db, event.id)!;
   });
 }
@@ -489,6 +505,8 @@ export function backfillEvents(ctx: AttendanceCtx, actor: Actor, body: BackfillB
     type: 'checkin' | 'checkout';
     guardianId: string | null;
     personName: string | null;
+    authorizationId: string | null;
+    override: boolean;
     occurredAt: string;
     note: string | null;
     rows: { clientId: string; childId: string }[];
@@ -504,10 +522,24 @@ export function backfillEvents(ctx: AttendanceCtx, actor: Actor, body: BackfillB
       continue;
     }
     const note = row.note?.trim() || null;
-    const key = `${row.type}|${row.guardianId ?? `p:${row.personName?.trim().toLowerCase()}`}|${occurredAt}|${note ?? ''}`;
+    const authorizationId = row.guardianId ? null : (row.authorizationId ?? null);
+    // Sheets never carry a credential, so a checkout by someone who is neither a registered
+    // guardian nor covered by a one-off authorization is an exception by definition (§4.9).
+    const override = !!row.override || (row.type === 'checkout' && !row.guardianId && !authorizationId);
+    const key = `${row.type}|${row.guardianId ?? `p:${row.personName?.trim().toLowerCase()}`}|${authorizationId ?? ''}|${override ? 'x' : ''}|${occurredAt}|${note ?? ''}`;
     let g = groups.get(key);
     if (!g) {
-      g = { key, type: row.type, guardianId: row.guardianId ?? null, personName: row.guardianId ? null : (row.personName?.trim() ?? null), occurredAt, note, rows: [] };
+      g = {
+        key,
+        type: row.type,
+        guardianId: row.guardianId ?? null,
+        personName: row.guardianId ? null : (row.personName?.trim() ?? null),
+        authorizationId,
+        override,
+        occurredAt,
+        note,
+        rows: [],
+      };
       groups.set(key, g);
     }
     g.rows.push({ clientId: row.clientId, childId: row.childId });
@@ -523,11 +555,11 @@ export function backfillEvents(ctx: AttendanceCtx, actor: Actor, body: BackfillB
         type: g.type,
         guardianId: g.guardianId,
         personName: g.personName,
+        authorizationId: g.authorizationId,
         method: 'manual',
         credentialId: null,
-        // A checkout by an unregistered person on paper is an exception by definition.
-        override: g.type === 'checkout' && !g.guardianId,
-        note: g.type === 'checkout' && !g.guardianId && (!g.note || g.note.length < 10) ? `${g.note ? `${g.note} — ` : ''}Lançamento da folha de papel pela secretaria` : g.note,
+        override: g.override,
+        note: g.override && (!g.note || g.note.length < 10) ? `${g.note ? `${g.note} — ` : ''}Lançamento da folha de papel pela secretaria` : g.note,
         occurredAt: g.occurredAt,
         queued: false,
         events: g.rows,

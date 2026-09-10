@@ -13,7 +13,7 @@ import {
 import { actorOf, authOf, requireRole } from '../auth/plugin.js';
 import type { Ctx } from '../context.js';
 import { type Db, all, one, placeholders, tx } from '../db/index.js';
-import { getSetting, getSettingBool, SETTING_KEYS, setSetting } from '../db/settings.js';
+import { getSetting, getSettingBool, SETTING_KEYS, setSetting, countOutboundEmail } from '../db/settings.js';
 import type { AuditRow, ChildRow, EventRow, GateHeartbeatRow } from '../db/rows.js';
 import { childrenGate } from '../dto/children.js';
 import { eventToDto } from '../dto/events.js';
@@ -24,6 +24,7 @@ import { parse, queryBool, queryInt, queryStr } from '../lib/validate.js';
 import { absentStreaks } from '../services/absence.js';
 import { createBackupArchive, lastBackupAt, runBackup } from '../services/backup.js';
 import { testEmail } from '../services/email.js';
+import { emailsSentToday } from '../services/notifications/dispatcher.js';
 import { applyImport, importTemplateCsv, planImport } from '../services/import.js';
 import { presentChildren } from '../services/status.js';
 import { readUploadedFile } from './upload.js';
@@ -102,8 +103,9 @@ export function registerAdminRoutes(api: FastifyInstance, ctx: Ctx): void {
 
     const notifications: AdminStats['notifications'] = {
       failedLast24h: count(`SELECT COUNT(*) AS n FROM notifications WHERE status = 'failed' AND created_at >= ?`, dayAgo),
-      skippedLast24h: count(`SELECT COUNT(*) AS n FROM notifications WHERE status = 'skipped' AND created_at >= ?`, dayAgo),
-      emailsToday: count(`SELECT COUNT(*) AS n FROM notifications WHERE channel = 'email' AND status = 'sent' AND sent_at >= ? AND sent_at < ?`, dayStart, dayEnd),
+      // Only quota skips are reported here; `email_disabled` / `no_subscription` / `voided` are not incidents.
+      skippedLast24h: count(`SELECT COUNT(*) AS n FROM notifications WHERE status = 'skipped' AND error = 'quota' AND created_at >= ?`, dayAgo),
+      emailsToday: emailsSentToday(db, config, now),
       emailDailyLimit: config.smtp.dailyLimit,
       emailEnabled: ctx.mailer.enabled,
       pushEnabled: ctx.push.enabled(),
@@ -152,6 +154,7 @@ export function registerAdminRoutes(api: FastifyInstance, ctx: Ctx): void {
     const daycareName = getSetting(db, SETTING_KEYS.daycareName) ?? config.daycareName;
     try {
       await ctx.mailer.send({ to, replyTo: getSetting(db, SETTING_KEYS.contactEmail), ...testEmail(daycareName, req.now, config.tz) });
+      countOutboundEmail(db, todayCivil(config.tz, req.now));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new ApiError('EMAIL_DISABLED', `Falha ao enviar: ${message}`);

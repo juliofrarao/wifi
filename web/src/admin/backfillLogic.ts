@@ -10,6 +10,10 @@ export interface PersonOption {
   /** For links: guardianId; for authorizations: personName. */
   guardianId: string | null;
   personName: string | null;
+  /** One-off authorization covering this person (sent so the pickup is not an exception). */
+  authorizationId: string | null;
+  /** Whether a checkout by this person is allowed without an exception (R2). */
+  allowed: boolean;
 }
 
 export interface BackfillRowInput {
@@ -31,19 +35,22 @@ export function personOptions(child: ChildAdminDTO, date: string): PersonOption[
   const out: PersonOption[] = [];
   for (const g of child.guardians) {
     if (g.blocked) continue;
+    const allowed = g.canPickup && (!g.validFrom || g.validFrom <= date) && (!g.validUntil || g.validUntil >= date);
     out.push({
       value: `g:${g.id}`,
-      label: `${g.name} (${(g.relationshipLabel || relationshipLabel(g.relationship)).toLowerCase()})`,
+      label: `${g.name} (${(g.relationshipLabel || relationshipLabel(g.relationship)).toLowerCase()})${allowed ? '' : ' — sem permissão para retirar'}`,
       guardianId: g.id,
       personName: null,
+      authorizationId: null,
+      allowed,
     });
   }
   for (const a of child.authorizations) {
     if (a.revokedAt) continue;
     if (a.validFrom > date || a.validUntil < date) continue;
-    out.push({ value: `a:${a.id}`, label: `${a.personName} (${a.relationshipLabel}, autorização avulsa)`, guardianId: null, personName: a.personName });
+    out.push({ value: `a:${a.id}`, label: `${a.personName} (${a.relationshipLabel}, autorização avulsa)`, guardianId: null, personName: a.personName, authorizationId: a.id, allowed: true });
   }
-  out.push({ value: OTHER_PERSON, label: 'Outra pessoa (digitar nome)', guardianId: null, personName: null });
+  out.push({ value: OTHER_PERSON, label: 'Outra pessoa (digitar nome) — exceção', guardianId: null, personName: null, authorizationId: null, allowed: false });
   return out;
 }
 
@@ -72,16 +79,23 @@ export function buildBackfillRows(
 
   for (const input of inputs) {
     const opts = options.get(input.childId) ?? [];
-    const resolve = (who: string, other: string): { guardianId: string | null; personName: string | null } | string => {
+    type Who = { guardianId: string | null; personName: string | null; authorizationId: string | null; allowed: boolean };
+    const resolve = (who: string, other: string): Who | string => {
       if (!who) return 'Escolha quem deixou/retirou';
       if (who === OTHER_PERSON) {
         const name = other.trim();
         if (name.length < 2) return 'Digite o nome da pessoa';
-        return { guardianId: null, personName: name };
+        return { guardianId: null, personName: name, authorizationId: null, allowed: false };
       }
       const opt = opts.find((o) => o.value === who);
       if (!opt) return 'Pessoa inválida';
-      return { guardianId: opt.guardianId, personName: opt.personName };
+      return { guardianId: opt.guardianId, personName: opt.personName, authorizationId: opt.authorizationId, allowed: opt.allowed };
+    };
+    /** Checkout rows by someone without permission are exceptions and need a reason (≥ 10 chars). */
+    const exception = (who: Who): { override: true; note: string } | string => {
+      const reason = (note ?? '').trim();
+      if (reason.length < 10) return 'Saída por pessoa sem permissão: escreva o motivo na observação (mínimo 10 caracteres)';
+      return { override: true, note: reason };
     };
 
     let checkinIso: string | null = null;
@@ -94,7 +108,7 @@ export function buildBackfillRows(
         else {
           checkinIso = zonedToIso(date, input.checkinTime, timeZone);
           const clientId = newId();
-          rows.push({ clientId, childId: input.childId, type: 'checkin', occurredAt: checkinIso, note, ...who });
+          rows.push({ clientId, childId: input.childId, type: 'checkin', occurredAt: checkinIso, note, guardianId: who.guardianId, personName: who.personName });
           index.set(clientId, { childId: input.childId, type: 'checkin' });
         }
       }
@@ -108,9 +122,23 @@ export function buildBackfillRows(
         const who = resolve(input.checkoutWho, input.checkoutOther);
         if (typeof who === 'string') errors[`${input.childId}.checkout`] = who;
         else {
-          const clientId = newId();
-          rows.push({ clientId, childId: input.childId, type: 'checkout', occurredAt: zonedToIso(date, input.checkoutTime, timeZone), note, ...who });
-          index.set(clientId, { childId: input.childId, type: 'checkout' });
+          const extra = who.allowed ? null : exception(who);
+          if (typeof extra === 'string') errors[`${input.childId}.checkout`] = extra;
+          else {
+            const clientId = newId();
+            rows.push({
+              clientId,
+              childId: input.childId,
+              type: 'checkout',
+              occurredAt: zonedToIso(date, input.checkoutTime, timeZone),
+              note: extra ? extra.note : note,
+              guardianId: who.guardianId,
+              personName: who.personName,
+              authorizationId: who.authorizationId,
+              ...(extra ? { override: true } : {}),
+            });
+            index.set(clientId, { childId: input.childId, type: 'checkout' });
+          }
         }
       }
     }

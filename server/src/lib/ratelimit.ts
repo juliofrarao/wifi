@@ -2,7 +2,7 @@
  * Failure-based rate limits backed by the login_attempts table (R13).
  * Only failures are recorded; valid sessions are never throttled.
  *
- * Keys: `id:<identifier>` | `ip:<ip>` | `lookup:<sessionId>`.
+ * Keys: `id:<identifier>` | `ip:<ip>` | `lookup:<sessionId>` | `pin:<userId>` | `forgot:<identifier>`.
  */
 import type { Db } from '../db/index.js';
 import { rateLimited } from './errors.js';
@@ -17,6 +17,10 @@ export const LIMITS = {
   loginIdentifier: { max: 5, windowMs: 15 * MINUTE_MS } satisfies Limit,
   loginIp: { max: 20, windowMs: 15 * MINUTE_MS } satisfies Limit,
   lookupSession: { max: 20, windowMs: 10 * MINUTE_MS } satisfies Limit,
+  /** Wrong PINs against one guard, whatever session or device tries (SEC-1). */
+  pinTarget: { max: 5, windowMs: 15 * MINUTE_MS } satisfies Limit,
+  /** Password-reset requests per identifier; every call counts (SEC-2). */
+  forgotIdentifier: { max: 3, windowMs: 15 * MINUTE_MS } satisfies Limit,
 } as const;
 
 export function identifierKey(identifier: string): string {
@@ -27,6 +31,12 @@ export function ipKey(ip: string): string {
 }
 export function lookupKey(sessionId: string): string {
   return `lookup:${sessionId}`;
+}
+export function pinKey(userId: string): string {
+  return `pin:${userId}`;
+}
+export function forgotKey(identifier: string): string {
+  return `forgot:${identifier.trim().toLowerCase()}`;
 }
 
 export interface LimitCheck {

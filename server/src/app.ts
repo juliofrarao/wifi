@@ -31,6 +31,36 @@ export type { AppDeps, Ctx } from './context.js';
 
 const NO_CACHE_FILES = new Set(['index.html', 'sw.js', 'manifest.webmanifest', 'version.json']);
 
+/**
+ * CSP for the PWA (spec §8: no inline scripts). `style-src 'unsafe-inline'` is needed for React
+ * style attributes and the noscript message; images may be data:/blob: (QR codes, photo previews).
+ */
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "worker-src 'self'",
+  "manifest-src 'self'",
+  "media-src 'self' blob:",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join('; ');
+
+/** `TRUST_PROXY=1` trusts only the nearest proxy hop, `2` the two nearest, etc. */
+function hopCountTrust(hops: number): (address: string, hop: number) => boolean {
+  return (_address, hop) => hop < hops;
+}
+
+/** Invite/reset tokens and photo signatures travel in URLs: never write them to logs (SEC-5). */
+export function redactUrl(url: string): string {
+  return url.replace(/(\/api\/auth\/(?:invite|reset)\/)[^/?#]+/, '$1<redacted>').replace(/([?&]t=)[^&#]+/, '$1<redacted>');
+}
+
 export function readWebVersion(webDist: string): string {
   try {
     const raw = fs.readFileSync(path.join(webDist, 'version.json'), 'utf8');
@@ -68,9 +98,25 @@ export function buildApp(deps: AppDeps, options: BuildOptions = {}): FastifyInst
   seedSettings(db, config);
 
   const app = Fastify({
-    logger: options.logger ?? { level: config.logLevel },
-    trustProxy: config.trustProxy,
+    logger: options.logger ?? {
+      level: config.logLevel,
+      serializers: {
+        req: (req: { method: string; url: string; ip?: string }) => ({ method: req.method, url: redactUrl(req.url), remoteAddress: req.ip }),
+      },
+    },
+    // Fastify's types do not admit a hop count; express it as the equivalent function.
+    trustProxy: typeof config.trustProxy === 'number' ? hopCountTrust(config.trustProxy) : config.trustProxy,
     bodyLimit: 1024 * 1024,
+  });
+
+  // Browser hardening on every response (photos keep their own sandbox CSP, see routes/files.ts).
+  app.addHook('onSend', async (req, reply) => {
+    if (!req.url.startsWith('/api/files/')) reply.header('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    reply.header('Permissions-Policy', 'geolocation=(), payment=()');
+    if (config.trustProxy) reply.header('Strict-Transport-Security', 'max-age=31536000');
   });
 
   const ctx: Ctx = {
@@ -87,7 +133,7 @@ export function buildApp(deps: AppDeps, options: BuildOptions = {}): FastifyInst
   app.setErrorHandler((err: unknown, req: FastifyRequest, reply: FastifyReply) => {
     const apiErr = toApiError(err);
     if (apiErr.code === 'INTERNAL') req.log.error({ err }, 'erro interno');
-    else req.log.debug({ code: apiErr.code, url: req.url }, apiErr.message);
+    else req.log.debug({ code: apiErr.code, url: redactUrl(req.url) }, apiErr.message);
     if (apiErr.code === 'RATE_LIMITED') {
       const retry = (apiErr.details as { retryAfterSeconds?: number } | undefined)?.retryAfterSeconds;
       if (retry) reply.header('Retry-After', String(retry));

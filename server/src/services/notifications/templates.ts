@@ -4,7 +4,7 @@
  * document number (only "documento conferido pela portaria"). Push bodies
  * name at most 3 children ("+N") through joinNames.
  */
-import { EVENT_TYPE_LABELS, type EventType, formatCivilDate, formatCode, formatDate, formatTime, joinNames, relationshipLabel } from '@creche/shared';
+import { EVENT_TYPE_LABELS, type EventType, civilDate, formatCivilDate, formatCode, formatDate, formatTime, joinNames, relationshipLabel } from '@creche/shared';
 import type { EventRow } from '../../db/rows.js';
 import { escapeHtml, htmlLayout, subjectPrefix } from '../email.js';
 
@@ -40,6 +40,8 @@ export interface AttendanceTemplateInput {
   blockedEventIds: Set<string>;
   /** Instant the sheet was entered by the office, for late backfills (> 3 h). */
   backfilledAt: string | null;
+  /** Civil "today" of the daycare when rendering (so past-day texts do not say "hoje"). */
+  today?: string;
 }
 
 const uniq = (names: string[]) => [...new Set(names)];
@@ -103,9 +105,11 @@ function entryInfo(input: AttendanceTemplateInput): string {
   const withEntry = events.filter((e) => checkinAt.has(e.child_id));
   if (withEntry.length === 0) return '';
   const times = uniq(withEntry.map((e) => formatTime(checkinAt.get(e.child_id)!, daycare.tz)));
-  if (withEntry.length === events.length && times.length === 1) return ` Entrada hoje às ${times[0]}.`;
+  const sameDay = !input.today || civilDate(events[0].occurred_at, daycare.tz) === input.today;
+  const when = sameDay ? 'hoje' : 'no mesmo dia';
+  if (withEntry.length === events.length && times.length === 1) return ` Entrada ${when} às ${times[0]}.`;
   const parts = withEntry.map((e) => `${e.child_name} às ${formatTime(checkinAt.get(e.child_id)!, daycare.tz)}`);
-  return ` Entradas hoje: ${parts.join(', ')}.`;
+  return ` Entradas ${when}: ${parts.join(', ')}.`;
 }
 
 export function renderAttendance(input: AttendanceTemplateInput): Rendered {
